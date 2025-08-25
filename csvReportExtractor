@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV/Excel/ZIP Viewer and HTML Table Converter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Switched to jsdelivr CDN and added defer attribute for more reliable loading -->
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .table-container {
+            max-height: 60vh;
+            overflow: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #e2e8f0;
+            padding: 0.75rem;
+            text-align: left;
+        }
+        th {
+            background-color: #f8fafc;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .btn {
+            transition: all 0.3s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        #toast {
+            transition: transform 0.5s ease-in-out, opacity 0.5s ease-in-out;
+        }
+    </style>
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center mb-8 relative">
+            <div class="absolute top-0 right-0">
+                <select id="language-selector" class="rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                    <option value="en">English</option>
+                    <option value="es">Español</option>
+                    <option value="pt">Português (Brasil)</option>
+                </select>
+            </div>
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900" data-lang="appTitle">File Viewer & HTML Converter</h1>
+            <p class="text-gray-600 mt-2" data-lang="appSubtitle">Upload a CSV, Excel (.xls, .xlsx) or ZIP file with CSVs to view and convert it to HTML tables or a single Excel file.</p>
+        </header>
+
+        <div id="error-message" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-6" role="alert">
+            <strong class="font-bold" data-lang="errorTitle">Loading Error:</strong>
+            <span class="block sm:inline" data-lang="errorSubtitle">Some necessary libraries could not be loaded. Please check your internet connection.</span>
+        </div>
+
+        <main class="bg-white p-6 md:p-8 rounded-2xl shadow-lg">
+            <div class="mb-6">
+                <label for="file-upload" class="block text-sm font-medium text-gray-700 mb-2" data-lang="uploadLabel">Upload your file:</label>
+                <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-lg">
+                    <div class="space-y-1 text-center">
+                        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                            <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                        <div class="flex text-sm text-gray-600">
+                            <label for="file-input" class="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500">
+                                <span data-lang="uploadLink">Upload a file</span>
+                                <input id="file-input" name="file-input" type="file" class="sr-only" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, .zip">
+                            </label>
+                            <p class="pl-1" data-lang="uploadOrDrag">or drag and drop</p>
+                        </div>
+                        <p class="text-xs text-gray-500" data-lang="uploadHint">CSV, XLS, XLSX, ZIP up to 10MB</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="output" class="hidden">
+                <h2 id="filename" class="text-xl font-semibold mb-4 text-gray-900"></h2>
+                <!-- This is now a container for multiple tables -->
+                <div id="table-preview-container">
+                    <!-- Content will be generated by JavaScript -->
+                </div>
+                <div class="mt-6 flex flex-col sm:flex-row gap-4 flex-wrap">
+                    <button id="download-excel-btn" class="btn w-full sm:w-auto flex-1 inline-flex justify-center items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                        <svg class="w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        <span data-lang="downloadExcel">Download Excel</span>
+                    </button>
+                    <button id="copy-html-btn" class="btn w-full sm:w-auto flex-1 inline-flex justify-center items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        <svg class="w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                        <span data-lang="copyHtml">Copy HTML Code</span>
+                    </button>
+                     <button id="download-html-btn" class="btn w-full sm:w-auto flex-1 inline-flex justify-center items-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        <svg class="w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        <span data-lang="downloadHtml">Download HTML</span>
+                    </button>
+                </div>
+                <textarea id="html-output" class="hidden w-full h-32 mt-4 p-2 border border-gray-300 rounded-md bg-gray-50"></textarea>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-5 right-5 bg-green-500 text-white py-2 px-4 rounded-lg shadow-md opacity-0 transform translate-y-10">
+        Action completed!
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // State variable to hold data for Excel export
+            let zipCsvData = [];
+
+            const missingLibs = [];
+            if (typeof JSZip === 'undefined') missingLibs.push('JSZip');
+            if (typeof Papa === 'undefined') missingLibs.push('PapaParse');
+            if (typeof XLSX === 'undefined') missingLibs.push('XLSX');
+
+            if (missingLibs.length > 0) {
+                const errorMessage = `No se pudieron cargar las siguientes librerías: ${missingLibs.join(', ')}. La funcionalidad de la aplicación puede estar limitada.`;
+                console.error(errorMessage);
+                const errorDiv = document.getElementById('error-message');
+                if (errorDiv) {
+                    errorDiv.querySelector('span').textContent = errorMessage;
+                    errorDiv.classList.remove('hidden');
+                }
+            }
+
+            const fileInput = document.getElementById('file-input');
+            const outputDiv = document.getElementById('output');
+            const tablePreviewContainer = document.getElementById('table-preview-container');
+            const filenameDisplay = document.getElementById('filename');
+            const copyBtn = document.getElementById('copy-html-btn');
+            const downloadBtn = document.getElementById('download-html-btn');
+            const downloadExcelBtn = document.getElementById('download-excel-btn');
+            const htmlOutputTextarea = document.getElementById('html-output');
+            const toast = document.getElementById('toast');
+            const dropZone = document.querySelector('.border-dashed');
+            const langSelector = document.getElementById('language-selector');
+
+            // --- I18n ---
+            const translations = {
+                en: {
+                    pageTitle: "CSV/Excel/ZIP Viewer and HTML Table Converter",
+                    appTitle: "File Viewer & HTML Converter",
+                    appSubtitle: "Upload a CSV, Excel (.xls, .xlsx) or ZIP file with CSVs to view and convert it to HTML tables or a single Excel file.",
+                    errorTitle: "Loading Error:",
+                    errorSubtitle: "Some necessary libraries could not be loaded. Please check your internet connection.",
+                    uploadLabel: "Upload your file:",
+                    uploadLink: "Upload a file",
+                    uploadOrDrag: "or drag and drop",
+                    uploadHint: "CSV, XLS, XLSX, ZIP up to 10MB",
+                    downloadExcel: "Download Excel",
+                    copyHtml: "Copy HTML Code",
+                    downloadHtml: "Download HTML",
+                    toastSuccess: "Action completed!",
+                    toastCopySuccess: "HTML code copied!",
+                    toastCopyError: "Error copying code.",
+                    toastInvalidFile: "Please upload a valid CSV, Excel, or ZIP file.",
+                    toastZipError: "Error reading the ZIP file.",
+                    previewTitle: "Results for: ",
+                    processing: "Processing file...",
+                    noCsvFound: "No valid (or non-omitted) .csv files were found in the ZIP archive.",
+                    emptyFile: "The file is empty or has no data to display."
+                },
+                es: {
+                    pageTitle: "Visor de CSV/Excel/ZIP y Conversor a Tabla HTML",
+                    appTitle: "Visor de Archivos y Conversor a HTML",
+                    appSubtitle: "Sube un archivo CSV, Excel (.xls, .xlsx) o un ZIP con CSVs para visualizarlo y convertirlo a tablas HTML o a un único archivo Excel.",
+                    errorTitle: "Error de Carga:",
+                    errorSubtitle: "No se pudieron cargar algunas librerías necesarias. Por favor, revisa la conexión a internet.",
+                    uploadLabel: "Sube tu archivo:",
+                    uploadLink: "Carga un archivo",
+                    uploadOrDrag: "o arrástralo y suéltalo",
+                    uploadHint: "CSV, XLS, XLSX, ZIP hasta 10MB",
+                    downloadExcel: "Descargar Excel",
+                    copyHtml: "Copiar Código HTML",
+                    downloadHtml: "Descargar HTML",
+                    toastSuccess: "¡Acción completada!",
+                    toastCopySuccess: "¡Código HTML copiado!",
+                    toastCopyError: "Error al copiar el código.",
+                    toastInvalidFile: "Por favor, sube un archivo CSV, Excel o ZIP válido.",
+                    toastZipError: "Error al leer el archivo ZIP.",
+                    previewTitle: "Resultados para: ",
+                    processing: "Procesando archivo...",
+                    noCsvFound: "No se encontraron archivos .csv válidos (o no omitidos) en el archivo ZIP.",
+                    emptyFile: "El archivo está vacío o no tiene datos para mostrar."
+                },
+                pt: {
+                    pageTitle: "Visualizador de CSV/Excel/ZIP e Conversor para Tabela HTML",
+                    appTitle: "Visualizador de Arquivos e Conversor HTML",
+                    appSubtitle: "Carregue um arquivo CSV, Excel (.xls, .xlsx) ou ZIP com CSVs para visualizar e converter em tabelas HTML ou um único arquivo Excel.",
+                    errorTitle: "Erro ao Carregar:",
+                    errorSubtitle: "Algumas bibliotecas necessárias não puderam ser carregadas. Verifique sua conexão com a internet.",
+                    uploadLabel: "Carregue seu arquivo:",
+                    uploadLink: "Carregar um arquivo",
+                    uploadOrDrag: "ou arraste e solte",
+                    uploadHint: "CSV, XLS, XLSX, ZIP até 10MB",
+                    downloadExcel: "Baixar Excel",
+                    copyHtml: "Copiar Código HTML",
+                    downloadHtml: "Baixar HTML",
+                    toastSuccess: "Ação concluída!",
+                    toastCopySuccess: "Código HTML copiado!",
+                    toastCopyError: "Erro ao copiar o código.",
+                    toastInvalidFile: "Por favor, carregue um arquivo CSV, Excel ou ZIP válido.",
+                    toastZipError: "Erro ao ler o arquivo ZIP.",
+                    previewTitle: "Resultados para: ",
+                    processing: "Processando arquivo...",
+                    noCsvFound: "Nenhum arquivo .csv válido (ou não omitido) foi encontrado no arquivo ZIP.",
+                    emptyFile: "O arquivo está vazio ou não tem dados para exibir."
+                }
+            };
+
+            function setLanguage(lang) {
+                document.documentElement.lang = lang;
+                document.title = translations[lang].pageTitle;
+                document.querySelectorAll('[data-lang]').forEach(el => {
+                    const key = el.getAttribute('data-lang');
+                    if (translations[lang][key]) {
+                        el.textContent = translations[lang][key];
+                    }
+                });
+                localStorage.setItem('preferredLanguage', lang);
+            }
+
+            langSelector.addEventListener('change', (e) => setLanguage(e.target.value));
+
+            // Set initial language
+            const preferredLanguage = localStorage.getItem('preferredLanguage') || 'en';
+            langSelector.value = preferredLanguage;
+            setLanguage(preferredLanguage);
+            // --- End I18n ---
+
+
+            fileInput.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (file) processFile(file);
+            });
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('border-indigo-600', 'bg-indigo-50');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('border-indigo-600', 'bg-indigo-50');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('border-indigo-600', 'bg-indigo-50');
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    fileInput.files = e.dataTransfer.files;
+                    processFile(file);
+                }
+            });
+
+            function resetUI() {
+                zipCsvData = [];
+                tablePreviewContainer.innerHTML = '';
+                downloadExcelBtn.classList.add('hidden');
+                outputDiv.classList.add('hidden');
+            }
+            
+            function toTitleCase(str) {
+                if (!str) return str;
+                const smallWords = /^(a|un|y|a|ante|bajo|cabe|con|contra|de|desde|en|entre|hacia|hasta|para|por|según|sin|so|sobre|tras|el|la|los|las)$/i;
+                return str.toString().toLowerCase().split(' ').map((word, index) => {
+                    if (index > 0 && word.match(smallWords)) {
+                        return word;
+                    }
+                    return word.charAt(0).toUpperCase() + word.substring(1);
+                }).join(' ');
+            }
+
+            function processFile(file) {
+                resetUI();
+                filenameDisplay.textContent = translations[langSelector.value].previewTitle + file.name;
+                tablePreviewContainer.innerHTML = `<p class="text-gray-500">${translations[langSelector.value].processing}</p>`;
+                outputDiv.classList.remove('hidden');
+                
+                const reader = new FileReader();
+
+                if (file.name.endsWith('.csv')) {
+                    reader.onload = (e) => {
+                        Papa.parse(e.target.result, {
+                            header: true,
+                            skipEmptyLines: true,
+                            complete: (results) => {
+                                tablePreviewContainer.innerHTML = '';
+                                createAndAppendTable(results.data, file.name);
+                                generateHtmlOutput();
+                            }
+                        });
+                    };
+                    reader.readAsText(file);
+                } else if (file.name.endsWith('.xls') || file.name.endsWith('.xlsx')) {
+                    reader.onload = (e) => {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+                        
+                        tablePreviewContainer.innerHTML = '';
+                        createAndAppendTable(jsonData, `${firstSheetName} in ${file.name}`);
+                        generateHtmlOutput();
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else if (file.name.endsWith('.zip')) {
+                    reader.onload = async (e) => {
+                        try {
+                            const zip = await JSZip.loadAsync(e.target.result);
+                            tablePreviewContainer.innerHTML = ''; 
+                            
+                            const baseNamesToOmit = new Set([
+                                'education_seven_star_experience_monthly-2_doctypes_averages_last_30_days',
+                                'education_seven_star_experience_monthly-2_doctypes_month_over_month',
+                                'education_seven_star_experience_monthly-2_doctypes_percent_mau_last_30_days',
+                                'education_seven_star_experience_monthly-2_doctypes_performance_score',
+                                'education_seven_star_experience_monthly-affinity_-_connected_users',
+                                'education_seven_star_experience_monthly-affinity_-_cumulative_connections',
+                                'education_seven_star_experience_monthly-data_freshness',
+                                'education_seven_star_experience_monthly-magic_write_usage',
+                                'education_seven_star_experience_monthly-number_of_designs_collaborated',
+                                'education_seven_star_experience_monthly-params_-_account',
+                                'education_seven_star_experience_monthly-params_-_report_months',
+                                'education_seven_star_experience_monthly-poll_quiz_interactions',
+                                'education_seven_star_experience_monthly-team_templates',
+                                'education_seven_star_experience_monthly-total_saved',
+                                'education_seven_star_experience_monthly-poll_quiz_designs_created',
+                                'education_seven_star_experience_monthly-magic_users_over_time_-_cumulative'
+                            ]);
+                            
+                            function getBaseName(filename) {
+                                const match = filename.match(/-[a-f0-9]{12}-/);
+                                if (match) {
+                                    return filename.substring(0, match.index);
+                                }
+                                return filename.replace('.csv', ''); // Fallback
+                            }
+
+                            let csvEntries = [];
+                            zip.forEach((relativePath, zipEntry) => {
+                                const baseName = getBaseName(zipEntry.name);
+                                if (zipEntry.name.endsWith('.csv') && !zipEntry.dir && !baseNamesToOmit.has(baseName)) {
+                                    csvEntries.push(zipEntry);
+                                }
+                            });
+
+                            csvEntries.sort((a, b) => a.name.localeCompare(b.name));
+
+                            if (csvEntries.length === 0) {
+                                tablePreviewContainer.innerHTML = `<p class="text-red-500">${translations[langSelector.value].noCsvFound}</p>`;
+                                return;
+                            }
+
+                            const promises = csvEntries.map(zipEntry => 
+                                zipEntry.async('string').then(text => {
+                                    return new Promise((resolve) => {
+                                        Papa.parse(text, {
+                                            header: true,
+                                            skipEmptyLines: true,
+                                            dynamicTyping: true,
+                                            complete: (results) => {
+                                                let fileData = results.data;
+                                                const headers = Object.keys(fileData[0] || {});
+                                                const baseName = getBaseName(zipEntry.name);
+                                                
+                                                if (baseName.includes('magic_users_over_time')) {
+                                                    const monthlyData = {};
+                                                    fileData.forEach(row => {
+                                                        const month = row.MONTH;
+                                                        const role = row.ROLE_NAME;
+                                                        const count = row['COUNT(*)'] || row.COUNT || 0;
+                                                        if (!month || !role) return;
+
+                                                        if (!monthlyData[month]) {
+                                                            monthlyData[month] = { TEACHERS_COUNT: 0, STUDENTS_COUNT: 0 };
+                                                        }
+                                                        if (String(role).toLowerCase() === 'teacher') {
+                                                            monthlyData[month].TEACHERS_COUNT += count;
+                                                        } else if (String(role).toLowerCase() === 'student') {
+                                                            monthlyData[month].STUDENTS_COUNT += count;
+                                                        }
+                                                    });
+                                                    fileData = Object.keys(monthlyData).sort().map(month => ({
+                                                        MONTH: month,
+                                                        STUDENTS_COUNT: monthlyData[month].STUDENTS_COUNT,
+                                                        TEACHERS_COUNT: monthlyData[month].TEACHERS_COUNT
+                                                    }));
+                                                } else if (baseName.includes('brand_activity')) {
+                                                    let columnToSplit = null;
+                                                    for (const header of headers) {
+                                                        if (typeof fileData[0][header] === 'string' && fileData[0][header].includes('teachers:')) {
+                                                            columnToSplit = header;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if (columnToSplit) {
+                                                        fileData = fileData.map(row => {
+                                                            const newData = { ...row };
+                                                            const cellValue = String(newData[columnToSplit]);
+                                                            const teacherMatch = cellValue.match(/teachers: (\d+)/);
+                                                            const studentMatch = cellValue.match(/students: (\d+)/);
+                                                            newData['Teachers'] = teacherMatch ? parseInt(teacherMatch[1], 10) : 0;
+                                                            newData['Students'] = studentMatch ? parseInt(studentMatch[1], 10) : 0;
+                                                            delete newData[columnToSplit];
+                                                            return newData;
+                                                        });
+                                                    }
+                                                } else if (baseName.includes('summary_stats')) {
+                                                    const columnsToRemove = new Set(['DATE', 'IS_MONTH_END_DATE', 'IS_MONTH_END_DATE_OR_LATEST_DATE', 'IS_LAST_THREE_MONTHS', 'IS_REPORTING_MONTHS', 'ACCOUNT_ID', 'ACCOUNT_NAME', 'CANVA_BRAND_IDS', 'TOTAL_POTENTIAL_USERS_GROUP']);
+                                                    fileData = fileData.map(row => {
+                                                        const newRow = { ...row };
+                                                        columnsToRemove.forEach(col => delete newRow[col]);
+                                                        return newRow;
+                                                    });
+                                                } else if (baseName.includes('user_activity')) {
+                                                    fileData.sort((a, b) => {
+                                                        const brandA = a.BRAND_NAME || '';
+                                                        const brandB = b.BRAND_NAME || '';
+                                                        const roleA = a.ROLE_NAME || '';
+                                                        const roleB = b.ROLE_NAME || '';
+                                                        const designsA = a.DESIGNS_CREATED || 0;
+                                                        const designsB = b.DESIGNS_CREATED || 0;
+
+                                                        if (brandA.localeCompare(brandB) !== 0) {
+                                                            return brandA.localeCompare(brandB);
+                                                        }
+                                                        if (roleA.localeCompare(roleB) !== 0) {
+                                                            return roleA.localeCompare(roleB);
+                                                        }
+                                                        return designsB - designsA;
+                                                    });
+                                                } else if (headers.includes('IS_MONTH_END_DATE')) {
+                                                    fileData = fileData.filter(row => row.IS_MONTH_END_DATE === true);
+                                                }
+
+                                                // Apply Title Case formatting to BRAND_NAME and BRAND_DISPLAY_NAME
+                                                fileData.forEach(row => {
+                                                    if (row.hasOwnProperty('BRAND_NAME')) {
+                                                        row.BRAND_NAME = toTitleCase(row.BRAND_NAME);
+                                                    }
+                                                    if (row.hasOwnProperty('BRAND_DISPLAY_NAME')) {
+                                                        row.BRAND_DISPLAY_NAME = toTitleCase(row.BRAND_DISPLAY_NAME);
+                                                    }
+                                                });
+
+                                                zipCsvData.push({ name: zipEntry.name, data: fileData });
+                                                createAndAppendTable(fileData, zipEntry.name);
+                                                resolve();
+                                            }
+                                        });
+                                    });
+                                })
+                            );
+
+                            await Promise.all(promises);
+                            
+                            downloadExcelBtn.classList.remove('hidden');
+                            generateHtmlOutput();
+
+                        } catch (err) {
+                            showToast(translations[langSelector.value].toastZipError, true);
+                            tablePreviewContainer.innerHTML = `<p class="text-red-500">${translations[langSelector.value].toastZipError}</p>`;
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    showToast(translations[langSelector.value].toastInvalidFile, true);
+                    tablePreviewContainer.innerHTML = '';
+                }
+            }
+
+            function createAndAppendTable(data, title) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'mb-8';
+
+                const h3 = document.createElement('h3');
+                h3.textContent = title;
+                h3.className = 'text-lg font-semibold mb-2 text-gray-800';
+                wrapper.appendChild(h3);
+                
+                const tableContainerDiv = document.createElement('div');
+                tableContainerDiv.className = 'table-container border border-gray-200 rounded-lg';
+
+                const table = document.createElement('table');
+                table.className = 'min-w-full divide-y divide-gray-200';
+
+                if (!data || data.length === 0) {
+                    table.innerHTML = `<thead><tr><th>Aviso</th></tr></thead><tbody><tr><td>${translations[langSelector.value].emptyFile}</td></tr></tbody>`;
+                } else {
+                    const headers = Object.keys(data[0]);
+                    const thead = document.createElement('thead');
+                    const headerRow = document.createElement('tr');
+                    headers.forEach(headerText => {
+                        const th = document.createElement('th');
+                        th.textContent = headerText;
+                        th.className = 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider';
+                        headerRow.appendChild(th);
+                    });
+                    thead.appendChild(headerRow);
+                    table.appendChild(thead);
+
+                    const tbody = document.createElement('tbody');
+                    tbody.className = "bg-white divide-y divide-gray-200";
+                    data.forEach(row => {
+                        const tr = document.createElement('tr');
+                        headers.forEach(header => {
+                            const td = document.createElement('td');
+                            td.textContent = row[header] !== undefined && row[header] !== null ? row[header] : '';
+                            td.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-700';
+                            tr.appendChild(td);
+                        });
+                        tbody.appendChild(tr);
+                    });
+                    table.appendChild(tbody);
+                }
+                
+                tableContainerDiv.appendChild(table);
+                wrapper.appendChild(tableContainerDiv);
+                tablePreviewContainer.appendChild(wrapper);
+            }
+
+            function generateHtmlOutput() {
+                const content = tablePreviewContainer.innerHTML;
+                const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tabla de Datos</title>
+    <style>
+        body { font-family: sans-serif; margin: 2rem; }
+        .table-wrapper { margin-bottom: 2rem; }
+        h3 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #dddddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+    </style>
+</head>
+<body>
+    ${content}
+</body>
+</html>`;
+                htmlOutputTextarea.value = html.trim();
+            }
+
+            copyBtn.addEventListener('click', () => {
+                htmlOutputTextarea.classList.remove('hidden');
+                htmlOutputTextarea.select();
+                htmlOutputTextarea.setSelectionRange(0, 99999);
+                try {
+                    document.execCommand('copy');
+                    showToast(translations[langSelector.value].toastCopySuccess);
+                } catch (err) {
+                    showToast(translations[langSelector.value].toastCopyError, true);
+                }
+                htmlOutputTextarea.classList.add('hidden');
+            });
+
+            downloadBtn.addEventListener('click', () => {
+                const htmlContent = htmlOutputTextarea.value;
+                const blob = new Blob([htmlContent], { type: 'text/html' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                const originalFilename = fileInput.files[0] ? fileInput.files[0].name : 'data';
+                const baseFilename = originalFilename.substring(0, originalFilename.lastIndexOf('.')) || originalFilename;
+                a.download = `${baseFilename}.html`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+            });
+            
+            function getIntuitiveSheetName(filename) {
+                let name = filename.replace('education_seven_star_experience_monthly-', '');
+                const match = name.match(/-[a-f0-9]{12}-/);
+                if (match) {
+                    name = name.substring(0, match.index);
+                }
+                name = name.replace(/_/g, ' '); // Replace underscores with spaces
+                return name.substring(0, 31); // Ensure it's not longer than 31 chars
+            }
+
+            downloadExcelBtn.addEventListener('click', () => {
+                if (typeof XLSX === 'undefined') {
+                    showToast('Error: La librería para crear Excel (XLSX) no se cargó.', true); return;
+                }
+                if (zipCsvData.length === 0) {
+                    showToast('No hay datos de CSV para exportar.', true); return;
+                }
+
+                const wb = XLSX.utils.book_new();
+                const usedSheetNames = {};
+
+                zipCsvData.forEach(csvFile => {
+                    const data = csvFile.data;
+                    if (data.length === 0) return; // Skip empty sheets
+                    
+                    const dataForExcel = data.map(row => {
+                        const newRow = {};
+                        for (const key in row) {
+                            if (typeof row[key] === 'boolean') {
+                                newRow[key] = row[key] ? 'TRUE' : 'FALSE';
+                            } else {
+                                newRow[key] = row[key];
+                            }
+                        }
+                        return newRow;
+                    });
+
+                    const ws = XLSX.utils.json_to_sheet(dataForExcel, { skipHeader: false });
+                    
+                    const headers = Object.keys(data[0]);
+                    
+                    const colWidths = headers.map(header => {
+                        const maxHeaderLength = header ? String(header).length : 0;
+                        const maxColLength = Math.max(...data.map(row => (row[header] ? String(row[header]).length : 0)));
+                        return { wch: Math.max(maxHeaderLength, maxColLength) + 2 };
+                    });
+                    ws['!cols'] = colWidths;
+                    
+                    const range = XLSX.utils.decode_range(ws['!ref']);
+                    ws['!autofilter'] = { ref: XLSX.utils.encode_range(range) };
+
+                    const percentColumns = [];
+                    headers.forEach((header, index) => {
+                        if (header.toUpperCase().includes('PERCENT')) {
+                            percentColumns.push(index);
+                        }
+                    });
+
+                    if (percentColumns.length > 0) {
+                        for (let R = range.s.r + 1; R <= range.e.r; ++R) {
+                            for (let C of percentColumns) {
+                                const cell_address = { c: C, r: R };
+                                const cell_ref = XLSX.utils.encode_cell(cell_address);
+                                if (!ws[cell_ref]) continue;
+                                ws[cell_ref].t = 'n';
+                                ws[cell_ref].z = '0%';
+                            }
+                        }
+                    }
+
+                    const intuitiveName = getIntuitiveSheetName(csvFile.name);
+                    let sheetName = intuitiveName;
+                    
+                    let counter = 1;
+                    while (usedSheetNames[sheetName]) {
+                        counter++;
+                        const suffix = ` (${counter})`;
+                        sheetName = intuitiveName.substring(0, 31 - suffix.length) + suffix;
+                    }
+                    usedSheetNames[sheetName] = true;
+                    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+                });
+
+                const originalFilename = fileInput.files[0] ? fileInput.files[0].name : 'data';
+                const baseFilename = originalFilename.substring(0, originalFilename.lastIndexOf('.')) || originalFilename;
+                XLSX.writeFile(wb, `${baseFilename}.xlsx`);
+            });
+            
+            function showToast(message, isError = false) {
+                toast.textContent = message;
+                toast.className = `fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-md opacity-0 transform translate-y-10 ${isError ? 'bg-red-500' : 'bg-green-600'}`;
+                
+                setTimeout(() => {
+                    toast.classList.remove('opacity-0', 'translate-y-10');
+                    toast.classList.add('opacity-100', 'translate-y-0');
+                }, 10);
+
+                setTimeout(() => {
+                    toast.classList.remove('opacity-100', 'translate-y-0');
+                    toast.classList.add('opacity-0', 'translate-y-10');
+                }, 3000);
+            }
+        });
+    </script>
+</body>
+</html>
